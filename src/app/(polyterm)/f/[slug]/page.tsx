@@ -10,7 +10,7 @@ export default async function FeaturePage({ params }: Props) {
   if (!feature) notFound();
 
   return (
-    <div className="mx-auto max-w-6xl space-y-2">
+    <div className="w-full space-y-2">
       <div className="terminal-panel">
         <div className="terminal-panel-header flex items-center justify-between gap-2">
           <span>{feature.group}</span>

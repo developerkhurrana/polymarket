@@ -79,6 +79,7 @@ export function MarketDetailClient({
     return d.toISOString().slice(0, 10);
   });
   const [history, setHistory] = useState<PricePoint[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyErr, setHistoryErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -164,8 +165,11 @@ export function MarketDetailClient({
     async function loadHistory() {
       if (!yesToken || !targetDate) {
         setHistory([]);
+        setHistoryLoading(false);
         return;
       }
+      setHistoryLoading(true);
+      setHistory([]);
       setHistoryErr(null);
       try {
         const d = new Date(`${targetDate}T00:00:00Z`);
@@ -195,6 +199,8 @@ export function MarketDetailClient({
           setHistory([]);
           setHistoryErr(e instanceof Error ? e.message : "History fetch failed");
         }
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
       }
     }
     void loadHistory();
@@ -203,9 +209,11 @@ export function MarketDetailClient({
     };
   }, [yesToken, targetDate]);
 
+  const lastHistoryPoint = history.at(-1);
+
   const backtest = useMemo(() => {
     if (!summary) return null;
-    const entry = history.at(-1)?.p ?? null;
+    const entry = lastHistoryPoint?.p ?? null;
     if (entry == null || entry <= 0 || entry >= 1) return null;
     const btSummary = {
       ...summary,
@@ -213,7 +221,7 @@ export function MarketDetailClient({
       prices: summary.prices.map((p, i) => (i === summary.yesIndex ? entry : p)),
     };
     return generateSimpleBacktestSignal(btSummary, bankroll);
-  }, [summary, history, bankroll]);
+  }, [summary, lastHistoryPoint, bankroll]);
 
   const winnerIndex = useMemo(() => (summary ? inferWinningOutcomeIndex(summary) : null), [summary]);
   const realized = useMemo(() => {
@@ -430,14 +438,29 @@ export function MarketDetailClient({
               </div>
             </div>
             {historyErr && <p className="mt-2 text-[10px] text-terminal-down">{historyErr}</p>}
-            {!historyErr && !yesToken && (
+            {!historyErr && historyLoading && (
+              <p className="mt-2 text-[10px] text-muted-foreground">Loading CLOB price history for this window…</p>
+            )}
+            {!historyErr && !historyLoading && !yesToken && (
               <p className="mt-2 text-[10px] text-muted-foreground">No CLOB token id for this market.</p>
             )}
-            {!historyErr && yesToken && history.length === 0 && (
+            {!historyErr && !historyLoading && yesToken && history.length === 0 && (
               <p className="mt-2 text-[10px] text-muted-foreground">No historical points in that window.</p>
             )}
-            {!historyErr && backtest && (
+            {!historyErr && !historyLoading && backtest && (
               <div className="mt-2 space-y-1">
+                <p className="text-[10px] text-muted-foreground">
+                  Entry uses last daily YES close in the window (UTC).{" "}
+                  {lastHistoryPoint != null && Number.isFinite(lastHistoryPoint.t) ? (
+                    <>
+                      Last candle:{" "}
+                      <span className="text-foreground/90">
+                        {new Date(lastHistoryPoint.t * 1000).toISOString().slice(0, 10)}
+                      </span>
+                      .
+                    </>
+                  ) : null}
+                </p>
                 <p className="text-foreground/95">
                   On {targetDate}, model signal:{" "}
                   <span className="text-terminal-up">
@@ -454,15 +477,23 @@ export function MarketDetailClient({
                   <span className="tabular-nums text-terminal-up">+${backtest.expectedProfitIfWin.toFixed(2)}</span>.
                 </p>
                 {winnerIndex != null ? (
-                  <p className="text-[10px] text-foreground/90">
-                    Actual resolved outcome:{" "}
-                    <span className="text-primary">{summary?.outcomes[winnerIndex] ?? `#${winnerIndex}`}</span>.{" "}
-                    Backtest result:{" "}
-                    <span className={realized?.won ? "text-terminal-up" : "text-terminal-down"}>
-                      {realized?.won ? "WIN" : "LOSS"}
-                    </span>{" "}
-                    ({realized ? `${realized.pnl >= 0 ? "+" : ""}$${realized.pnl.toFixed(2)}` : "n/a"}).
-                  </p>
+                  <>
+                    <p className="text-[10px] text-foreground/90">
+                      Versus <span className="text-primary">current</span> market resolution (Gamma snapshot):{" "}
+                      <span className="text-primary">{summary?.outcomes[winnerIndex] ?? `#${winnerIndex}`}</span>.{" "}
+                      If that side won:{" "}
+                      <span className={realized?.won ? "text-terminal-up" : "text-terminal-down"}>
+                        {realized?.won ? "WIN" : "LOSS"}
+                      </span>{" "}
+                      ({realized ? `${realized.pnl >= 0 ? "+" : ""}$${realized.pnl.toFixed(2)}` : "n/a"}) on the hypothetical
+                      bet above.
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Changing the target date only changes which historical price seeds the signal — it does not replay a
+                      past resolution. Final outcome here is always from today&apos;s market data, not &quot;as of&quot; the
+                      picked date.
+                    </p>
+                  </>
                 ) : (
                   <p className="text-[10px] text-muted-foreground">
                     Outcome not fully resolved yet, so realized P/L cannot be confirmed.
